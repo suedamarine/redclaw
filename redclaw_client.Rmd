@@ -1,0 +1,379 @@
+---
+title: "Redclaw Client Report"
+author: "Vinny"
+date: "2022-11-15"
+output:
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+```
+
+```{r message = FALSE, warning = FALSE}
+# import libraries
+library(tidyverse)
+library(broom)
+library(kableExtra)
+```
+
+```{r}
+# define parameters
+bw_0 <- 0.0221
+```
+
+## Deliverables:
+
+* Develop growth model
+* Develop production plan
+* Perform system mass balance equations
+* Develop prototype system
+
+***
+
+## Growth Modeling:
+
+Literature review undertaken to provide growth data for as wide a range of life-stage. This data collection does not replace the benefit of a formal growth trial undertaken under replication of proposed production specifications.
+
+
+**_Cherax quadricarinatus_** growth characteristics:
+
+``` {r fig.cap = "Figure 1. Daily growth rate by mass - datapoints from published literature.", fig.align = "center"}
+# import data
+redclaw_growth <- read.csv("data/redclaw_growth.csv")
+
+redclaw.growth <- redclaw_growth %>%
+  mutate(wt.mid = (wt_2 + wt_1) / 2,
+         g.gain.day = (wt_2 - wt_1) / (t_2 - t_1),
+         geometric.weight = sqrt(wt_1 * wt_2))
+
+# try base code log-log relationship - looks good!
+redclaw.fit.twinlog <- lm(log(g.gain.day) ~ log(wt.mid), data = redclaw.growth)
+
+# calculate coefficients for growth curve bw_1 = [bw_0^c_1 + c_2 * days]^c_4
+c_1 <- 1 - redclaw.fit.twinlog$coef[2]
+c_2 <- c_1 * exp(redclaw.fit.twinlog$coef[1])
+c_4 <- 1 / c_1
+
+# plot relationship between weight and grams gained per day 
+p_rc_gain <- redclaw.growth %>%
+  ggplot(aes(wt.mid, g.gain.day, color = source)) +
+  geom_point() +
+  stat_function(fun = function(x) exp(redclaw.fit.twinlog$coef[1]) * x^redclaw.fit.twinlog$coef[2], color = 'dodgerblue') +
+  xlab("Mass (g)") +
+  ylab("Daily mass gain (g/cray/day)") +
+  theme_minimal()
+
+p_rc_gain
+```
+
+***
+From the growth model, an estimate of crayfish body mass - as a function of time from hatch - can be calculated
+
+```{r fig.cap = "Figure 2. Estimated crayfish mass at time from hatch.", fig.align='center'}
+
+# estimate body-weight over time geometric model
+bodyweight <- tibble(day = seq(1,300,1)) %>%
+  mutate(bw = (bw_0^c_1 + c_2 * day)^c_4)
+
+# plot estimated growth curve geometric
+cray.growth.plot <- bodyweight %>%
+  ggplot(aes(day, bw)) +
+  geom_line() +
+  labs(x = "Days", y = "Mass (g)") +
+  theme_minimal()
+cray.growth.plot
+```
+```{r}
+cray.max <- 1
+juvenile.25 <- 25
+juvenile.max <- 45
+crayling.1.g <- ceiling(which(abs(bodyweight$bw - cray.max) == min(abs(bodyweight$bw - cray.max))))
+juvenile.25.g <- ceiling(which(abs(bodyweight$bw - 25) == min(abs(bodyweight$bw - 25))))
+juvenile.45.g <- ceiling(which(abs(bodyweight$bw - juvenile.max) == min(abs(bodyweight$bw - juvenile.max))))
+crayling.harvest.day <- 7 * ceiling(which(abs(bodyweight$bw - cray.max) == min(abs(bodyweight$bw - cray.max))) / 7)
+juvenile.harvest.day <- 7 * ceiling(which(abs(bodyweight$bw - juvenile.max) == min(abs(bodyweight$bw - juvenile.max))) / 7)
+```
+
+
+Estimated growth day for `r cray.max`g craylings: Day `r crayling.1.g`
+Estimated growth day for `r juvenile.25`g juveniles: Day `r juvenile.25.g`
+Estimated growth day for `r juvenile.max`g juveniles: Day `r juvenile.45.g`
+
+***
+
+## Production Plan
+
+```{r}
+crayling.monthly.target <- 227000 # monthly target of crayling stage 2 (min six weeks)
+breeding.population <- 5200
+fecundity <- 400 # number of eggs produced
+hatch.rate <- 0.9
+crayling.survival <- 0.7 # proportion survival from egg to stage 2
+hatching.frequency <- 3 # number of spawning events per year
+breeding.females <- breeding.population / 3 * 2
+breeding.males <- breeding.females / 2
+weekly.egg.prod <- breeding.females * 400 * 3 / 365 * 7
+weekly.egg.hatch <- weekly.egg.prod * hatch.rate
+cray.daily.mortality <- 0.00625
+breeding.population <- 5200
+average.adult.mass <- 100
+uk.breeding.population <- breeding.population / 225
+uk.breeding.females <- uk.breeding.population * 2 / 3
+uk.weekly.egg.prod <- uk.breeding.females * 400 * 3 / 365 * 7
+uk.weekly.egg.hatch <- uk.weekly.egg.prod * hatch.rate
+harvest.proportion <- 0.99
+```
+
+Develop production plan(s) to achieve:
+
+* UK redclaw start-up hub, maximise production permitted by available space
+* Redclaw commercial scale, monthly target `r format(crayling.monthly.target, scientific = FALSE)` (moult stage-2) `r cray.max`g craylings for harvest
+* UK breeding pairs as dictated by space
+* Commercial breeding pairs `r breeding.population`
+
+Parameters used:
+
+* Average fecundity `r fecundity`
+* Hatch rate `r hatch.rate * 100`%
+* Survival rate from egg to stage-2 moult crayling `r crayling.survival * 100`%
+* Breeding cycles; `r hatching.frequency` per year
+
+System designation:
+
+* Breeding - maintain breeding population of `r breeding.population` adult crayfish
+* Hatching - maintain berried crayfish in isolation until egg hatch
+* Crayling - maintain hatchlings until `r cray.max`g (stage-2 moult)
+* Juvenile - maintain retained juvenile crayfish until `r juvenile.max`g
+
+```{r}
+# import data
+redclaw.feed_rate <- read.csv("data/redclaw_feed_rate.csv")
+
+# try base code log-log relationship - looks good!
+redclaw.feed.twinlog <- lm(log(feed_rate) ~ log(mass), data = redclaw.feed_rate)
+
+batch_frequency <- 7 # days between batches
+batch_system_periods <- 1 # overall number of system periods
+growout_period <- 350 # period whose factor includes frequency, system period and exceeds minimum growout period
+
+# set production period to two growth periods to observe system loading
+prod_plan <- data.frame(facility_day = seq(0, 2 * growout_period - 1)) %>%
+  mutate(batch_1 = case_when(facility_day < growout_period ~ facility_day))
+
+for (lag_size in c(0:40)) {
+  
+  new_col_name <- paste0("lag.batch.", lag_size)
+  
+  prod_plan <- prod_plan %>%
+    mutate(!!sym(new_col_name) := lag(batch_1, n = lag_size * 7, default = NA))
+}  
+
+# remove column called batch_1
+prod_plan <- prod_plan %>% select(-batch_1) %>%
+  pivot_longer(c(lag.batch.0:lag.batch.40), names_to = "batch", values_to = "batch_day", values_drop_na = TRUE) %>%
+  mutate(system = case_when(batch_day %in% c(0:crayling.harvest.day) ~ "crayling",
+                            batch_day %in% c(crayling.harvest.day + 1 :juvenile.harvest.day - crayling.harvest.day) ~ "juvenile",
+                            batch_day > juvenile.harvest.day ~ "breeding"))
+
+prod.plan.1 <- prod_plan %>%
+  filter(system == "crayling" | system == "juvenile" | system == "breeding" & batch == "lag.batch.0")
+
+
+# custom color
+system_cols <- c(crayling = "#e5f5f9", juvenile = "99d8c9", breeding = "2ca25f")
+```
+
+***
+
+```{r fig.cap = "Figure 3. Production plan visualisation.", fig.align = "center"}
+systems_plot <- prod.plan.1 %>%
+  filter(facility_day < 328,
+         batch %in% c('lag.batch.0', 'lag.batch.1', 'lag.batch.2', 'lag.batch.3', 'lag.batch.4', 'lag.batch.5', 'lag.batch.6', 'lag.batch.7', 'lag.batch.8', 'lag.batch.9', 'lag.batch.10', 'lag.batch.11', 'lag.batch.12', 'lag.batch.13')) %>%
+  ggplot(aes(facility_day, batch, color = system)) +
+  geom_line(size = 3) +
+  scale_y_discrete(limits = c('lag.batch.0', 'lag.batch.1', 'lag.batch.2', 'lag.batch.3', 'lag.batch.4', 'lag.batch.5', 'lag.batch.6', 'lag.batch.7', 'lag.batch.8', 'lag.batch.9', 'lag.batch.10', 'lag.batch.11', 'lag.batch.12', 'lag.batch.13'),
+                   labels = c("Batch 1", "Batch 2", "Batch 3", "Batch 4", "Batch 5", "Batch 6", "Batch 7", "Batch 8", "Batch 9", "Batch 10", "Batch 11", "Batch 12", "Batch 13", "Batch 14")) +
+  scale_color_manual("", breaks = c("crayling", "juvenile", "breeding"),
+                     values = c(crayling = "#a6cee3", juvenile = "#1f78b4", breeding = "#b2df8a"),
+                     labels = c("Crayling", "Juvenile", "Breeding")) +
+  labs(x = "Day", y = "") + 
+  theme_minimal()
+systems_plot
+```
+
+***
+
+## System Occupancy
+
+System occupancy will be use to determine tank space and tank divisions, split according to:
+
+* UK System
+* Production Facility
+
+``` {r}
+system_loading <- prod.plan.1 %>%
+  mutate(cray.number = weekly.egg.hatch * (1 - cray.daily.mortality)^batch_day,
+         cray.number.mod = case_when(system == "juvenile" ~ weekly.egg.hatch * (1 - cray.daily.mortality)^crayling.harvest.day * (1 - harvest.proportion) * (1 - cray.daily.mortality)^(batch_day - crayling.harvest.day),
+                                     system == "crayling" ~ weekly.egg.hatch * (1 - cray.daily.mortality)^batch_day,
+                                     system == "breeding" ~ breeding.population),
+         cray.number.mod.2 = case_when(system == "juvenile" ~ weekly.egg.hatch * (1 - cray.daily.mortality)^crayling.harvest.day * (1 - harvest.proportion) * (1 - cray.daily.mortality)^(batch_day - crayling.harvest.day),
+                                       system == "crayling" ~ weekly.egg.hatch * (1 - cray.daily.mortality)^crayling.1.g,
+                                       system == "breeding" ~ breeding.population),
+         bw.g = case_when(system == "crayling" ~ (bw_0^c_1 + c_2 * batch_day)^c_4,
+                          system == "juvenile" ~ (bw_0^c_1 + c_2 * batch_day)^c_4,
+                          system == "breeding" ~ average.adult.mass),
+         unit = breeding.population * 2 / 3 * 3 / 365, # expected number of hatches per day
+         total.bw = bw.g * cray.number.mod,
+         feed.rate = case_when(exp(redclaw.feed.twinlog$coef[1]) * bw.g^redclaw.feed.twinlog$coef[2] >= 0.01 ~ exp(redclaw.feed.twinlog$coef[1]) * bw.g^redclaw.feed.twinlog$coef[2], TRUE ~ 0.01),
+         feed.g = bw.g * feed.rate,
+         total.feed.kg = feed.g * cray.number.mod / 1000,
+         protein.proportion = case_when(bw.g < 5 ~ 0.325, TRUE ~ 0.256),
+         total.protein = protein.proportion * total.feed.kg)
+
+# calculate max number of individuals in system at any one time
+max.occupancy <- system_loading %>%
+  group_by(system, facility_day) %>%
+  summarise(t_number = sum(cray.number.mod)) %>%
+  summarise(max.number = max(t_number))
+
+# calculate max number of units in system at any one time
+unit.number <- system_loading %>%
+  group_by(system, batch) %>%
+  summarise(unit.sum = sum(unit)) %>%
+  summarise(max.unit = max(unit.sum))
+
+# get max loading for each system
+max.loading <- system_loading %>%
+  group_by(system, facility_day) %>%
+  summarise(feed.sum = sum(total.feed.kg),
+            protein.sum = sum(total.protein),
+            t_number = sum(cray.number.mod),
+            mod.number = sum(cray.number.mod.2)) %>%
+  summarise(feed.max = max(feed.sum),
+            protein.max = max(protein.sum),
+            max.number = max(t_number),
+            max.mod.number = max(mod.number))
+```
+
+
+```{r}
+# build uk system loading onto production plan
+uk.system_loading <- prod.plan.1 %>%
+  mutate(cray.number = uk.weekly.egg.hatch * (1 - cray.daily.mortality)^batch_day,
+         cray.number.mod = case_when(system == "juvenile" ~ uk.weekly.egg.hatch * (1 - cray.daily.mortality)^crayling.harvest.day * 0.01 * (1 - cray.daily.mortality)^(batch_day - crayling.harvest.day),
+                                     system == "crayling" ~ uk.weekly.egg.hatch * (1 - cray.daily.mortality)^batch_day,
+                                     system == "breeding" ~ uk.breeding.population),
+         cray.number.mod.2 = case_when(system == "juvenile" ~ uk.weekly.egg.hatch * (1 - cray.daily.mortality)^crayling.harvest.day * (1 - harvest.proportion) * (1 - cray.daily.mortality)^(batch_day - crayling.harvest.day),
+                                       system == "crayling" ~ uk.weekly.egg.hatch * (1 - cray.daily.mortality)^crayling.1.g,
+                                       system == "breeding" ~ uk.breeding.population),
+         bw.g = case_when(system == "crayling" ~ (bw_0^c_1 + c_2 * batch_day)^c_4,
+                          system == "juvenile" ~ (bw_0^c_1 + c_2 * batch_day)^c_4,
+                          system == "breeding" ~ 100),
+         unit = uk.breeding.population * 2 / 3 * 3 / 365, # expected number of hatches per day
+         total.bw = bw.g * cray.number.mod,
+         feed.rate = case_when(exp(redclaw.feed.twinlog$coef[1]) * bw.g^redclaw.feed.twinlog$coef[2] >= 0.01 ~ exp(redclaw.feed.twinlog$coef[1]) * bw.g^redclaw.feed.twinlog$coef[2], TRUE ~ 0.01),
+         feed.g = bw.g * feed.rate,
+         total.feed.kg = feed.g * cray.number.mod / 1000,
+         protein.proportion = case_when(bw.g < 5 ~ 0.325, TRUE ~ 0.256),
+         total.protein = protein.proportion * total.feed.kg)
+
+# calculate max number of individuals in system at any one time
+uk.max.occupancy <- uk.system_loading %>%
+  group_by(system, facility_day) %>%
+  summarise(t_number = sum(cray.number.mod)) %>%
+  summarise(max.number = max(t_number))
+
+# calculate max number of units in system at any one time
+uk.unit.number <- uk.system_loading %>%
+  group_by(system, batch) %>%
+  summarise(unit.sum = sum(unit)) %>%
+  summarise(max.unit = max(unit.sum))
+
+# get max loading for each system
+uk.max.loading <- uk.system_loading %>%
+  group_by(system, facility_day) %>%
+  summarise(feed.sum = sum(total.feed.kg),
+            protein.sum = sum(total.protein),
+            t_number = sum(cray.number.mod),
+            mod.number = sum(cray.number.mod.2)) %>%
+  summarise(feed.max = max(feed.sum),
+            protein.max = max(protein.sum),
+            max.number = max(t_number),
+            max.mod.number = max(mod.number))
+```
+
+```{r}
+knitr::kables(
+  list(
+    # the first kable() to change column names
+    knitr::kable(
+      max.occupancy, col.names = c("Production System   | ", " Max Number"), valign = 't', digits = 0,
+    ),
+    # the second kable() to set the digits option
+    knitr::kable(uk.max.occupancy, digits = 0, col.names = c("UK System   | ", " Max Number") ,valign = 't')
+  ),
+  caption = 'Table 1. Production facility; system occupation.'
+) %>% kable_styling()
+```
+
+```{r}
+knitr::kables(
+  list(
+    # the first kable() to change column names
+    unit.number %>% filter(system == "crayling") %>% knitr::kable(
+      col.names = c("Production System   | ", " Max Number"), valign = 't', digits = 0,
+    ),
+    # the second kable() to set the digits option
+    uk.unit.number %>% filter(system == "crayling") %>% knitr::kable(digits = 0, col.names = c("UK System   | ", " Max Number") ,valign = 't')
+  ),
+  caption = "Table 2. Production facility; number of individual crayling 'families'."
+) %>% kable_styling()
+```
+
+***
+
+## Space Requirements
+
+```{r}
+# build production tanks
+flow.contingency <- 1.0 # extra flow capacity for system
+breeding.density <- 7
+hatching.density <- 20
+crayling.density <- 250
+juvenile.density <- 19
+tank.areas <- tibble(system = c("breeding", "hatching", "crayling", "juvenile"),
+                     ind.number = c(max.loading$max.mod.number[1], max.loading$max.mod.number[1] * 24 / 52 * 2 / 3, max.loading$max.mod.number[2], max.loading$max.mod.number[3]),
+                     area.required = ind.number / c(7, 20, 250, 19),
+                     water.depth = c(0.2, 0.2, 0.1, 0.1),
+                     tank.volumes = area.required * water.depth,
+                     tank.turnover = tank.volumes * flow.contingency)
+
+# build UK tanks
+uk.tank.areas <- tibble(system = c("breeding", "hatching", "crayling", "juvenile"),
+                     ind.number = c(uk.max.loading$max.mod.number[1], uk.max.loading$max.mod.number[1] * 24 / 52 * 3 / 3, uk.max.loading$max.mod.number[2], uk.max.loading$max.mod.number[3]),
+                     area.required = ind.number / c(breeding.density, hatching.density, crayling.density, juvenile.density),
+                     water.depth = c(0.2, 0.2, 0.1, 0.1),
+                     tank.volumes = area.required * water.depth,
+                     tank.turnover = tank.volumes * flow.contingency)
+```
+
+Space allocation according to the following densities per sq. metre
+
+* Breeding; `r breeding.density`
+* Hatching; `r hatching.density`
+* Crayling; `r crayling.density`
+* Juvenile; `r juvenile.density`
+
+``` {r}
+knitr::kable(tank.areas, digits = 1, caption = "Table 3. Production facility tank area requirements (sq. metres), volumes (cubic metres).", col.names = c("System", "Capacity", "Area", "Water Depth", "Tank Volumes ", "Tank Turnover")) %>%
+  kable_styling()
+```
+
+``` {r}
+knitr::kable(uk.tank.areas, digits = 1, caption = "Table 4. UK facility tank area requirements (sq. metres), volumes (cubic metres).", col.names = c("System", "Capacity", "Area", "Water Depth", "Tank Volumes ", "Tank Turnover")) %>%
+  kable_styling()
+```
+
+
+
